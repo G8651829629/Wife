@@ -10,14 +10,17 @@ interface VirtualWifeProps {
   emotion: string;
   animation: string;
   isListening: boolean;
+  isMusicPlaying: boolean;
 }
 
-function VRMModel({ emotion, animation, isListening }: VirtualWifeProps) {
+function VRMModel({ emotion, animation, isListening, isMusicPlaying }: VirtualWifeProps) {
   const modelRef = useRef<THREE.Group>();
   const [vrm, setVrm] = useState<VRM | null>(null);
   const [mixer, setMixer] = useState<THREE.AnimationMixer | null>(null);
   const [currentAction, setCurrentAction] = useState<THREE.AnimationAction | null>(null);
   const [animations, setAnimations] = useState<{ [key: string]: THREE.AnimationClip }>({});
+  const [danceAnimations, setDanceAnimations] = useState<THREE.AnimationClip[]>([]);
+  const [currentDanceIndex, setCurrentDanceIndex] = useState(0);
 
   // Load VRM model
   useEffect(() => {
@@ -60,15 +63,24 @@ function VRMModel({ emotion, animation, isListening }: VirtualWifeProps) {
       'Standing Greeting'
     ];
 
+    const danceFiles = ['Hip Hop Dancing', 'Rumba Dancing'];
     const loadedAnimations: { [key: string]: THREE.AnimationClip } = {};
+    const loadedDanceAnimations: THREE.AnimationClip[] = [];
 
     animationFiles.forEach((animName) => {
       fbxLoader.load(
         `/Animations/${animName}.fbx`,
         (fbx) => {
           if (fbx.animations && fbx.animations.length > 0) {
-            loadedAnimations[animName] = fbx.animations[0];
+            const clip = fbx.animations[0];
+            loadedAnimations[animName] = clip;
+            
+            if (danceFiles.includes(animName)) {
+              loadedDanceAnimations.push(clip);
+            }
+            
             setAnimations({ ...loadedAnimations });
+            setDanceAnimations([...loadedDanceAnimations]);
           }
         },
         undefined,
@@ -77,9 +89,50 @@ function VRMModel({ emotion, animation, isListening }: VirtualWifeProps) {
     });
   }, []);
 
-  // Handle animation changes
+  // Handle music-based dancing
   useEffect(() => {
-    if (!mixer || !vrm || !animations[animation]) return;
+    if (!mixer || !vrm || danceAnimations.length === 0) return;
+
+    if (isMusicPlaying) {
+      // Stop current animation
+      if (currentAction) {
+        currentAction.fadeOut(0.5);
+      }
+
+      // Start dance animation
+      const danceClip = danceAnimations[currentDanceIndex];
+      const danceAction = mixer.clipAction(danceClip);
+      danceAction.reset().fadeIn(0.5).play();
+      danceAction.setLoop(THREE.LoopRepeat, Infinity);
+      setCurrentAction(danceAction);
+
+      // Switch dance every 30 seconds
+      const danceInterval = setInterval(() => {
+        setCurrentDanceIndex(prev => (prev + 1) % danceAnimations.length);
+      }, 30000);
+
+      return () => clearInterval(danceInterval);
+    } else {
+      // Return to normal animation when music stops
+      if (currentAction && danceAnimations.some(dance => dance === currentAction.getClip())) {
+        currentAction.fadeOut(0.5);
+        
+        // Start normal animation after fade out
+        setTimeout(() => {
+          if (animations[animation]) {
+            const normalClip = animations[animation];
+            const normalAction = mixer.clipAction(normalClip);
+            normalAction.reset().fadeIn(0.5).play();
+            setCurrentAction(normalAction);
+          }
+        }, 500);
+      }
+    }
+  }, [isMusicPlaying, mixer, vrm, danceAnimations, currentDanceIndex, animations, animation, currentAction]);
+
+  // Handle regular animation changes (when not dancing)
+  useEffect(() => {
+    if (!mixer || !vrm || !animations[animation] || isMusicPlaying) return;
 
     // Stop current animation
     if (currentAction) {
@@ -97,7 +150,7 @@ function VRMModel({ emotion, animation, isListening }: VirtualWifeProps) {
         action.fadeOut(0.5);
       }
     };
-  }, [animation, mixer, animations, currentAction]);
+  }, [animation, mixer, animations, currentAction, isMusicPlaying]);
 
   // Handle emotion-based expressions
   useEffect(() => {
@@ -148,15 +201,27 @@ function VRMModel({ emotion, animation, isListening }: VirtualWifeProps) {
         const pulse = Math.sin(state.clock.elapsedTime * 8) * 0.1;
         vrm.scene.scale.setScalar(1 + pulse);
       }
+
+      // Add music dancing effects
+      if (isMusicPlaying) {
+        const musicPulse = Math.sin(state.clock.elapsedTime * 4) * 0.05;
+        vrm.scene.position.y = -1 + musicPulse;
+        
+        // Add subtle rotation for dancing
+        vrm.scene.rotation.y = Math.sin(state.clock.elapsedTime * 0.5) * 0.1;
+      } else {
+        vrm.scene.position.y = -1;
+        vrm.scene.rotation.y = 0;
+      }
     }
   });
 
   return vrm ? <primitive object={vrm.scene} ref={modelRef} /> : null;
 }
 
-export default function VirtualWife({ emotion, animation, isListening }: VirtualWifeProps) {
+export default function VirtualWife({ emotion, animation, isListening, isMusicPlaying }: VirtualWifeProps) {
   return (
-    <div className="w-full h-full">
+    <div className="w-full h-full relative">
       <Canvas
         camera={{ position: [0, 0, 3], fov: 50 }}
         gl={{ antialias: true, alpha: true }}
@@ -168,7 +233,8 @@ export default function VirtualWife({ emotion, animation, isListening }: Virtual
         <VRMModel 
           emotion={emotion} 
           animation={animation} 
-          isListening={isListening} 
+          isListening={isListening}
+          isMusicPlaying={isMusicPlaying}
         />
         
         <OrbitControls
@@ -183,6 +249,26 @@ export default function VirtualWife({ emotion, animation, isListening }: Virtual
         
         <Environment preset="studio" />
       </Canvas>
+
+      {/* Status Indicators */}
+      <div className="absolute top-4 left-4 space-y-2">
+        <div className="bg-black/50 text-white px-3 py-1 rounded-full text-sm">
+          Emotion: {emotion}
+        </div>
+        <div className="bg-black/50 text-white px-3 py-1 rounded-full text-sm">
+          Animation: {animation}
+        </div>
+        {isListening && (
+          <div className="bg-red-500 text-white px-3 py-1 rounded-full text-sm animate-pulse">
+            Listening...
+          </div>
+        )}
+        {isMusicPlaying && (
+          <div className="bg-purple-500 text-white px-3 py-1 rounded-full text-sm animate-pulse">
+            🎵 Dancing to Music
+          </div>
+        )}
+      </div>
     </div>
   );
 }
